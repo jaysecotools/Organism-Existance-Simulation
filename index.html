@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organism Existance Simulation</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Organism Existance Simulation</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="organismType">Organism Type:</label>
+                <select id="organismType">
+                    <option value="plant">Plant</option>
+                    <option value="herbivore">Herbivore</option>
+                    <option value="carnivore">Carnivore</option>
+                    <option value="omnivore">Omnivore</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label for="organismCount">Count:</label>
+                <input type="number" id="organismCount" min="1" value="10">
+            </div>
+            
+            <button id="addOrganisms">Add Organisms</button>
+            <button id="resetSimulation">Reset Simulation</button>
+            <button id="togglePause">Pause</button>
+        </div>
+        
+<div class="stats">
+    <div>Plants: <span id="plantCount">0</span></div>
+    <div>Herbivores: <span id="herbivoreCount">0</span></div>
+    <div>Carnivores: <span id="carnivoreCount">0</span></div>
+    <div>Omnivores: <span id="omnivoreCount">0</span></div>
+    <div>Total: <span id="totalCount">0</span></div>
+    <div>Avg. Energy: <span id="avgEnergy">0</span></div>
+    <div>Cycle: <span id="cycleCount">0</span></div>
+</div>
+        
+        <div class="simulation-area" id="simulationArea"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
