@@ -1,11 +1,31 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const simulationArea = document.getElementById('simulationArea');
+    // Canvas setup
+    const canvas = document.getElementById('simulationCanvas');
+    const ctx = canvas.getContext('2d');
+    const simulationContainer = document.querySelector('.simulation-container');
+    
+    // Resize canvas to fit container
+    function resizeCanvas() {
+        canvas.width = simulationContainer.clientWidth;
+        canvas.height = simulationContainer.clientHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    
+    // DOM elements
     const addOrganismsBtn = document.getElementById('addOrganisms');
     const resetSimulationBtn = document.getElementById('resetSimulation');
     const togglePauseBtn = document.getElementById('togglePause');
     const organismTypeSelect = document.getElementById('organismType');
     const organismCountInput = document.getElementById('organismCount');
     
+    // Population limits
+    const maxPlantsInput = document.getElementById('maxPlants');
+    const maxHerbivoresInput = document.getElementById('maxHerbivores');
+    const maxCarnivoresInput = document.getElementById('maxCarnivores');
+    const maxOmnivoresInput = document.getElementById('maxOmnivores');
+    
+    // Stats elements
     const plantCountSpan = document.getElementById('plantCount');
     const herbivoreCountSpan = document.getElementById('herbivoreCount');
     const carnivoreCountSpan = document.getElementById('carnivoreCount');
@@ -13,40 +33,75 @@ document.addEventListener('DOMContentLoaded', function() {
     const cycleCountSpan = document.getElementById('cycleCount');
     const totalCountSpan = document.getElementById('totalCount');
     const avgEnergySpan = document.getElementById('avgEnergy');
+    const fpsCounterSpan = document.getElementById('fpsCounter');
     
+    // Simulation state
     let organisms = [];
-    let links = [];
     let isPaused = false;
     let cycle = 0;
     let animationFrameId = null;
+    let lastTime = 0;
+    let fps = 0;
+    let frameCount = 0;
+    let lastFpsUpdate = 0;
     
-    // Spatial partitioning grid
-    const GRID_SIZE = 100;
-    let grid = {};
+    // Configuration
+    const CONFIG = {
+        MAX_UPDATES_PER_SECOND: 30,  // Logic updates per second
+        MAX_ENTITIES: 2000,          // Absolute maximum entities
+        GRID_SIZE: 100,              // Spatial partitioning cell size
+        PLANT_GROWTH_RATE: 0.02      // Chance for new plant to spawn each frame
+    };
     
     // Energy parameters
     const ENERGY = {
-        PLANT_GAIN: 0.1,       // Energy plants gain per cycle
-        HERBIVORE_GAIN: 15,     // Energy from eating a plant
-        CARNIVORE_GAIN: 25,     // Energy from eating a herbivore
-        OMNIVORE_PLANT_GAIN: 10, // Energy omnivore gets from plants
-        OMNIVORE_MEAT_GAIN: 20,  // Energy omnivore gets from animals
-        MOVE_COST: 0.1,        // Energy cost to move
-        BASE_COST: 0.05,       // Base energy cost per cycle
-        REPRODUCE_COST: 30,     // Energy needed to reproduce
-        START_ENERGY: 50        // Starting energy for new organisms
+        PLANT_GAIN: 0.1,
+        HERBIVORE_GAIN: 15,
+        CARNIVORE_GAIN: 25,
+        OMNIVORE_PLANT_GAIN: 10,
+        OMNIVORE_MEAT_GAIN: 20,
+        MOVE_COST: 0.1,
+        BASE_COST: 0.05,
+        REPRODUCE_COST: 30,
+        START_ENERGY: 50
     };
+    
+    // Colors for rendering
+    const COLORS = {
+        plant: '#4CAF50',
+        herbivore: '#2196F3',
+        carnivore: '#f44336',
+        omnivore: '#9C27B0',
+        linkPlantHerbivore: 'rgba(0, 255, 0, 0.2)',
+        linkPredator: 'rgba(255, 0, 0, 0.2)',
+        linkDefault: 'rgba(0, 0, 0, 0.1)'
+    };
+    
+    // Spatial partitioning grid
+    let grid = {};
+    
+    // Timing for decoupled update/render
+    let lastUpdateTime = 0;
+    const updateInterval = 1000 / CONFIG.MAX_UPDATES_PER_SECOND;
     
     // Initialize the simulation
     init();
     
     function init() {
-        updateStats();
+        // Add some initial organisms
+        addOrganisms('plant', 50);
+        addOrganisms('herbivore', 20);
+        addOrganisms('carnivore', 5);
+        addOrganisms('omnivore', 5);
+        
         startSimulation();
     }
     
     function startSimulation() {
         if (!animationFrameId) {
+            lastTime = performance.now();
+            lastUpdateTime = lastTime;
+            lastFpsUpdate = lastTime;
             update();
         }
     }
@@ -58,32 +113,58 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    function update() {
-        if (!isPaused) {
-            updateSpatialGrid();
-            simulate();
-            cycle++;
-            updateStats();
-        }
+    function update(currentTime) {
         animationFrameId = requestAnimationFrame(update);
+        
+        // Calculate delta time and FPS
+        const deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+        
+        // Update FPS counter every second
+        frameCount++;
+        if (currentTime - lastFpsUpdate >= 1000) {
+            fps = Math.round((frameCount * 1000) / (currentTime - lastFpsUpdate));
+            fpsCounterSpan.textContent = fps;
+            frameCount = 0;
+            lastFpsUpdate = currentTime;
+        }
+        
+        // Always render, but only update logic at fixed intervals
+        render();
+        
+        if (!isPaused) {
+            // Update logic at fixed time steps
+            const updateCount = Math.floor((currentTime - lastUpdateTime) / updateInterval);
+            
+            if (updateCount > 0) {
+                // Cap the number of updates to prevent spiral of death
+                const maxUpdates = 5;
+                const updatesToRun = Math.min(updateCount, maxUpdates);
+                
+                for (let i = 0; i < updatesToRun; i++) {
+                    simulate(updateInterval / 1000); // Convert to seconds
+                    lastUpdateTime += updateInterval;
+                }
+                
+                // If we're running behind, skip some updates
+                if (updateCount > maxUpdates) {
+                    lastUpdateTime = currentTime - updateInterval;
+                }
+            }
+        }
     }
     
-    function updateSpatialGrid() {
-        grid = {};
-        organisms.forEach(org => {
-            const gridX = Math.floor(org.x / GRID_SIZE);
-            const gridY = Math.floor(org.y / GRID_SIZE);
-            const key = `${gridX},${gridY}`;
-            if (!grid[key]) grid[key] = [];
-            grid[key].push(org);
-        });
-    }
-    
-    function simulate() {
+    function simulate(deltaTime) {
+        // Update cycle counter
+        cycle++;
+        
+        // Update spatial grid
+        updateSpatialGrid();
+        
         // Process plants first (growth)
         organisms.forEach(organism => {
             if (organism.type === 'plant') {
-                organism.energy += ENERGY.PLANT_GAIN;
+                organism.energy += ENERGY.PLANT_GAIN * deltaTime * 60; // Normalize to ~60fps
             }
         });
         
@@ -91,53 +172,42 @@ document.addEventListener('DOMContentLoaded', function() {
         organisms.forEach(organism => {
             if (organism.type !== 'plant') {
                 // Random direction changes
-                if (Math.random() < 0.02) {
+                if (Math.random() < 0.02 * deltaTime * 60) {
                     organism.dx = (Math.random() - 0.5) * organism.speed;
                     organism.dy = (Math.random() - 0.5) * organism.speed;
                 }
                 
                 // Move organism
-                organism.x += organism.dx;
-                organism.y += organism.dy;
+                organism.x += organism.dx * deltaTime * 60;
+                organism.y += organism.dy * deltaTime * 60;
                 
                 // Boundary checking
                 if (organism.x < 0) {
                     organism.x = 0;
                     organism.dx *= -1;
-                } else if (organism.x > simulationArea.offsetWidth - organism.size) {
-                    organism.x = simulationArea.offsetWidth - organism.size;
+                } else if (organism.x > canvas.width - organism.size) {
+                    organism.x = canvas.width - organism.size;
                     organism.dx *= -1;
                 }
                 
                 if (organism.y < 0) {
                     organism.y = 0;
                     organism.dy *= -1;
-                } else if (organism.y > simulationArea.offsetHeight - organism.size) {
-                    organism.y = simulationArea.offsetHeight - organism.size;
+                } else if (organism.y > canvas.height - organism.size) {
+                    organism.y = canvas.height - organism.size;
                     organism.dy *= -1;
                 }
                 
                 // Energy cost for moving
-                organism.energy -= ENERGY.MOVE_COST;
+                organism.energy -= ENERGY.MOVE_COST * deltaTime * 60;
             }
             
             // Base energy cost
-            organism.energy -= ENERGY.BASE_COST;
-            
-            // Update DOM element position
-            organism.element.style.left = `${organism.x}px`;
-            organism.element.style.top = `${organism.y}px`;
-            
-            // Update opacity based on energy level (visual feedback)
-            const energyRatio = organism.energy / ENERGY.START_ENERGY;
-            organism.element.style.opacity = Math.min(1, Math.max(0.3, energyRatio));
-            
-            // Highlight high-energy organisms
-            organism.element.classList.toggle('high-energy', organism.energy > ENERGY.START_ENERGY * 1.5);
+            organism.energy -= ENERGY.BASE_COST * deltaTime * 60;
             
             // Update digestion timer if exists
             if (organism.digesting !== undefined && organism.digesting > 0) {
-                organism.digesting--;
+                organism.digesting -= deltaTime * 60;
             }
         });
         
@@ -145,42 +215,52 @@ document.addEventListener('DOMContentLoaded', function() {
         processFeeding();
         processReproduction();
         
-        // Remove dead organisms
-        organisms = organisms.filter(organism => {
-            if (organism.energy <= 0) {
-                if (organism.element && organism.element.parentNode) {
-                    organism.element.parentNode.removeChild(organism.element);
-                }
-                return false;
-            }
-            return true;
-        });
-        
-        // Update links between organisms
-        updateLinks();
-    }
-    
-function processFeeding() {
-    // Herbivores eat plants - made more aggressive
-    organisms.filter(o => o.type === 'herbivore').forEach(herbivore => {
-        // Remove energy threshold - herbivores will always eat when they can
-        if ((herbivore.digesting === undefined || herbivore.digesting <= 0) && 
-            herbivore.energy < ENERGY.START_ENERGY * 1.5) {  // But don't eat when already full
+        // Random plant growth (if below max)
+        if (Math.random() < CONFIG.PLANT_GROWTH_RATE * deltaTime * 60) {
+            const currentPlants = organisms.filter(o => o.type === 'plant').length;
+            const maxPlants = parseInt(maxPlantsInput.value);
             
-            const nearbyPlant = findNearbyOrganism(herbivore, 'plant', herbivore.size + 10);  // Increased detection range
-            
-            if (nearbyPlant) {
-                herbivore.energy += ENERGY.HERBIVORE_GAIN;
-                // Completely remove the plant instead of just reducing energy
-                nearbyPlant.energy = 0;  // This will cause it to be removed in cleanup
-                herbivore.digesting = 5;  // Reduced from 10 to eat more frequently
-                
-                // Visual feedback - make herbivore "grow" briefly when eating
-                herbivore.element.classList.add('eating');
-                setTimeout(() => herbivore.element.classList.remove('eating'), 300);
+            if (currentPlants < maxPlants && organisms.length < CONFIG.MAX_ENTITIES) {
+                addOrganisms('plant', 1, true);
             }
         }
-    });
+        
+        // Remove dead organisms
+        organisms = organisms.filter(organism => organism.energy > 0);
+        
+        // Update stats every few cycles
+        if (cycle % 10 === 0) {
+            updateStats();
+        }
+    }
+    
+    function updateSpatialGrid() {
+        grid = {};
+        organisms.forEach(org => {
+            const gridX = Math.floor(org.x / CONFIG.GRID_SIZE);
+            const gridY = Math.floor(org.y / CONFIG.GRID_SIZE);
+            const key = `${gridX},${gridY}`;
+            if (!grid[key]) grid[key] = [];
+            grid[key].push(org);
+        });
+    }
+    
+    function processFeeding() {
+        // Herbivores eat plants
+        organisms.filter(o => o.type === 'herbivore').forEach(herbivore => {
+            if ((herbivore.digesting === undefined || herbivore.digesting <= 0) && 
+                herbivore.energy < ENERGY.START_ENERGY * 1.5) {
+                
+                const nearbyPlant = findNearbyOrganism(herbivore, 'plant', herbivore.size + 10);
+                
+                if (nearbyPlant) {
+                    herbivore.energy += ENERGY.HERBIVORE_GAIN;
+                    nearbyPlant.energy = 0;
+                    herbivore.digesting = 5;
+                    herbivore.eatingTimer = 10; // For visual effect
+                }
+            }
+        });
         
         // Carnivores eat herbivores
         organisms.filter(o => o.type === 'carnivore').forEach(carnivore => {
@@ -194,6 +274,7 @@ function processFeeding() {
                     carnivore.energy += ENERGY.CARNIVORE_GAIN;
                     nearbyHerbivore.energy -= ENERGY.CARNIVORE_GAIN * 2;
                     carnivore.digesting = 10;
+                    carnivore.eatingTimer = 10;
                 }
             }
         });
@@ -203,21 +284,21 @@ function processFeeding() {
             if (omnivore.energy < ENERGY.START_ENERGY * 0.75 && 
                 (omnivore.digesting === undefined || omnivore.digesting <= 0)) {
                 
-                // Try to find nearby herbivore first (prefer meat)
                 const nearbyHerbivore = findNearbyOrganism(omnivore, 'herbivore', omnivore.size + 5);
                 
                 if (nearbyHerbivore) {
                     omnivore.energy += ENERGY.OMNIVORE_MEAT_GAIN;
                     nearbyHerbivore.energy -= ENERGY.OMNIVORE_MEAT_GAIN * 2;
                     omnivore.digesting = 10;
+                    omnivore.eatingTimer = 10;
                 } else {
-                    // If no herbivores, look for plants
                     const nearbyPlant = findNearbyOrganism(omnivore, 'plant', omnivore.size + 5);
                     
                     if (nearbyPlant) {
                         omnivore.energy += ENERGY.OMNIVORE_PLANT_GAIN;
                         nearbyPlant.energy -= ENERGY.OMNIVORE_PLANT_GAIN * 2;
                         omnivore.digesting = 10;
+                        omnivore.eatingTimer = 10;
                     }
                 }
             }
@@ -225,8 +306,8 @@ function processFeeding() {
     }
     
     function findNearbyOrganism(organism, type, maxDistance) {
-        const gridX = Math.floor(organism.x / GRID_SIZE);
-        const gridY = Math.floor(organism.y / GRID_SIZE);
+        const gridX = Math.floor(organism.x / CONFIG.GRID_SIZE);
+        const gridY = Math.floor(organism.y / CONFIG.GRID_SIZE);
         
         // Check current and adjacent grid cells
         for (let x = gridX - 1; x <= gridX + 1; x++) {
@@ -249,11 +330,25 @@ function processFeeding() {
         const newOrganisms = [];
         
         organisms.forEach(organism => {
-            if (organism.energy > ENERGY.REPRODUCE_COST && Math.random() < 0.01) {
-                // Deduct reproduction cost
+            // Check population limits
+            const currentCount = organisms.filter(o => o.type === organism.type).length;
+            let maxCount;
+            
+            switch (organism.type) {
+                case 'plant': maxCount = parseInt(maxPlantsInput.value); break;
+                case 'herbivore': maxCount = parseInt(maxHerbivoresInput.value); break;
+                case 'carnivore': maxCount = parseInt(maxCarnivoresInput.value); break;
+                case 'omnivore': maxCount = parseInt(maxOmnivoresInput.value); break;
+                default: maxCount = Infinity;
+            }
+            
+            if (organism.energy > ENERGY.REPRODUCE_COST && 
+                Math.random() < 0.01 && 
+                currentCount < maxCount &&
+                organisms.length < CONFIG.MAX_ENTITIES) {
+                
                 organism.energy -= ENERGY.REPRODUCE_COST;
                 
-                // Create offspring
                 const offspring = {
                     type: organism.type,
                     x: organism.x + (Math.random() * 20 - 10),
@@ -263,24 +358,13 @@ function processFeeding() {
                     size: organism.size,
                     speed: organism.speed,
                     energy: ENERGY.REPRODUCE_COST,
-                    element: document.createElement('div')
+                    birthTime: performance.now()
                 };
                 
                 // Position within bounds
-                offspring.x = Math.max(0, Math.min(simulationArea.offsetWidth - offspring.size, offspring.x));
-                offspring.y = Math.max(0, Math.min(simulationArea.offsetHeight - offspring.size, offspring.y));
+                offspring.x = Math.max(0, Math.min(canvas.width - offspring.size, offspring.x));
+                offspring.y = Math.max(0, Math.min(canvas.height - offspring.size, offspring.y));
                 
-                offspring.element.className = `organism ${organism.type} pop-in`;
-                offspring.element.style.width = `${offspring.size}px`;
-                offspring.element.style.height = `${offspring.size}px`;
-                offspring.element.style.left = `${offspring.x}px`;
-                offspring.element.style.top = `${offspring.y}px`;
-                
-                setTimeout(() => {
-                    offspring.element.classList.remove('pop-in');
-                }, 500);
-                
-                simulationArea.appendChild(offspring.element);
                 newOrganisms.push(offspring);
             }
         });
@@ -294,16 +378,11 @@ function processFeeding() {
         return Math.sqrt(dx * dx + dy * dy);
     }
     
-    function updateLinks() {
-        // Clear existing links
-        links.forEach(link => {
-            if (link.element && link.element.parentNode) {
-                link.element.parentNode.removeChild(link.element);
-            }
-        });
-        links = [];
+    function render() {
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // Create new links between nearby organisms using spatial grid
+        // Draw links between nearby organisms
         for (let x in grid) {
             grid[x].forEach(org1 => {
                 const [gridX, gridY] = x.split(',').map(Number);
@@ -315,7 +394,7 @@ function processFeeding() {
                         if (grid[key]) {
                             grid[key].forEach(org2 => {
                                 if (org1 !== org2 && getDistance(org1, org2) < 100) {
-                                    createLink(org1, org2);
+                                    drawLink(org1, org2);
                                 }
                             });
                         }
@@ -323,42 +402,108 @@ function processFeeding() {
                 }
             });
         }
+        
+        // Draw organisms
+        organisms.forEach(organism => {
+            // Calculate size based on energy and eating state
+            let size = organism.size;
+            if (organism.eatingTimer > 0) {
+                size *= 1.3;
+                organism.eatingTimer--;
+            }
+            
+            // Calculate opacity based on energy
+            const energyRatio = organism.energy / ENERGY.START_ENERGY;
+            const opacity = Math.min(1, Math.max(0.3, energyRatio));
+            
+            // Draw organism
+            ctx.globalAlpha = opacity;
+            ctx.fillStyle = COLORS[organism.type];
+            
+            // High energy glow
+            if (organism.energy > ENERGY.START_ENERGY * 1.5) {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = COLORS[organism.type];
+            }
+            
+            ctx.beginPath();
+            ctx.arc(
+                organism.x + organism.size/2,
+                organism.y + organism.size/2,
+                size/2,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+            
+            // Reset shadow
+            ctx.shadowBlur = 0;
+            
+            // Pop-in animation for new organisms
+            if (performance.now() - organism.birthTime < 500) {
+                const progress = (performance.now() - organism.birthTime) / 500;
+                const scale = progress < 0.5 ? 
+                    progress * 2 * 1.2 : 
+                    1.2 - ((progress - 0.5) * 2 * 0.2);
+                
+                ctx.save();
+                ctx.translate(
+                    organism.x + organism.size/2,
+                    organism.y + organism.size/2
+                );
+                ctx.scale(scale, scale);
+                ctx.translate(
+                    -(organism.x + organism.size/2),
+                    -(organism.y + organism.size/2)
+                );
+                ctx.fill();
+                ctx.restore();
+            }
+        });
     }
     
-    function createLink(org1, org2) {
-        const linkElement = document.createElement('div');
-        linkElement.className = 'link';
-        
+    function drawLink(org1, org2) {
         const distance = getDistance(org1, org2);
         const angle = Math.atan2(org2.y - org1.y, org2.x - org1.x);
-        
-        linkElement.style.width = `${distance}px`;
-        linkElement.style.left = `${org1.x + org1.size/2}px`;
-        linkElement.style.top = `${org1.y + org1.size/2}px`;
-        linkElement.style.transform = `rotate(${angle}rad)`;
         
         // Different link color based on relationship
         if ((org1.type === 'herbivore' && org2.type === 'plant') || 
             (org2.type === 'herbivore' && org1.type === 'plant')) {
-            linkElement.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
+            ctx.strokeStyle = COLORS.linkPlantHerbivore;
         } else if ((org1.type === 'carnivore' && (org2.type === 'herbivore' || org2.type === 'omnivore')) || 
-                   (org2.type === 'carnivore' && (org1.type === 'herbivore' || org1.type === 'omnivore'))) {
-            linkElement.style.backgroundColor = 'rgba(255, 0, 0, 0.2)';
+                 (org2.type === 'carnivore' && (org1.type === 'herbivore' || org1.type === 'omnivore'))) {
+            ctx.strokeStyle = COLORS.linkPredator;
         } else {
-            linkElement.style.backgroundColor = 'rgba(0, 0, 0, 0.1)';
+            ctx.strokeStyle = COLORS.linkDefault;
         }
         
-        simulationArea.appendChild(linkElement);
-        
-        links.push({
-            element: linkElement,
-            org1: org1,
-            org2: org2
-        });
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(org1.x + org1.size/2, org1.y + org1.size/2);
+        ctx.lineTo(org2.x + org2.size/2, org2.y + org2.size/2);
+        ctx.stroke();
     }
     
-    function addOrganisms(type, count) {
-        for (let i = 0; i < count; i++) {
+    function addOrganisms(type, count, silent = false) {
+        // Check population limits
+        const currentCount = organisms.filter(o => o.type === type).length;
+        let maxCount;
+        
+        switch (type) {
+            case 'plant': maxCount = parseInt(maxPlantsInput.value); break;
+            case 'herbivore': maxCount = parseInt(maxHerbivoresInput.value); break;
+            case 'carnivore': maxCount = parseInt(maxCarnivoresInput.value); break;
+            case 'omnivore': maxCount = parseInt(maxOmnivoresInput.value); break;
+            default: maxCount = Infinity;
+        }
+        
+        // Don't exceed max entities
+        const availableSlots = Math.min(maxCount - currentCount, CONFIG.MAX_ENTITIES - organisms.length);
+        const actualCount = Math.min(count, availableSlots);
+        
+        if (actualCount <= 0) return;
+        
+        for (let i = 0; i < actualCount; i++) {
             const size = type === 'plant' ? 10 : 15;
             const speed = type === 'plant' ? 0 : 
                          type === 'herbivore' ? 0.8 : 
@@ -366,52 +511,28 @@ function processFeeding() {
             
             const organism = {
                 type: type,
-                x: Math.random() * (simulationArea.offsetWidth - size),
-                y: Math.random() * (simulationArea.offsetHeight - size),
+                x: Math.random() * (canvas.width - size),
+                y: Math.random() * (canvas.height - size),
                 dx: type === 'plant' ? 0 : (Math.random() - 0.5) * speed,
                 dy: type === 'plant' ? 0 : (Math.random() - 0.5) * speed,
                 size: size,
                 speed: speed,
                 energy: ENERGY.START_ENERGY,
-                element: document.createElement('div')
+                birthTime: performance.now()
             };
             
-            organism.element.className = `organism ${type} pop-in`;
-            organism.element.style.width = `${size}px`;
-            organism.element.style.height = `${size}px`;
-            organism.element.style.left = `${organism.x}px`;
-            organism.element.style.top = `${organism.y}px`;
-            
-            setTimeout(() => {
-                organism.element.classList.remove('pop-in');
-            }, 500);
-            
-            simulationArea.appendChild(organism.element);
             organisms.push(organism);
         }
-        updateStats();
+        
+        if (!silent) {
+            updateStats();
+        }
     }
     
     function resetSimulation() {
         stopSimulation();
-        
-        // Remove all organisms and links from DOM
-        organisms.forEach(organism => {
-            if (organism.element && organism.element.parentNode) {
-                organism.element.parentNode.removeChild(organism.element);
-            }
-        });
-        
-        links.forEach(link => {
-            if (link.element && link.element.parentNode) {
-                link.element.parentNode.removeChild(link.element);
-            }
-        });
-        
         organisms = [];
-        links = [];
         cycle = 0;
-        
         updateStats();
         startSimulation();
     }
@@ -445,20 +566,5 @@ function processFeeding() {
     togglePauseBtn.addEventListener('click', function() {
         isPaused = !isPaused;
         togglePauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
-    });
-    
-    // Handle window resize
-    window.addEventListener('resize', function() {
-        // Keep organisms within bounds
-        organisms.forEach(organism => {
-            if (organism.x > simulationArea.offsetWidth - organism.size) {
-                organism.x = simulationArea.offsetWidth - organism.size;
-            }
-            if (organism.y > simulationArea.offsetHeight - organism.size) {
-                organism.y = simulationArea.offsetHeight - organism.size;
-            }
-            organism.element.style.left = `${organism.x}px`;
-            organism.element.style.top = `${organism.y}px`;
-        });
     });
 });
